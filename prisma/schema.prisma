@@ -5,7 +5,7 @@
 
 generator client {
   provider = "prisma-client-js"
-  output   = "../generated/prisma"
+  output   = "../server/generated/prisma"
 }
 
 datasource db {
@@ -13,14 +13,68 @@ datasource db {
 }
 
 model m_menu {
+  permissions m_role_d[]
   id String @id @default(uuid()) @db.Uuid
   parent String? @db.Uuid
 
   name String @db.VarChar(100)
   desc String? @db.Text
   icon String? @db.VarChar(100)
-  is_actiive Boolean @default(true)
-  seq Int @default(0)
-  module String? @db.VarChar(100)
+  is_active Boolean @default(true) @map("is_actiive")
+  seq String @default("0") @db.VarChar(100)
+  modul String? @map("module") @db.VarChar(100)
+  sub_modul String? @db.VarChar(100)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
   path String? @db.VarChar(100)
+}
+
+model m_role {
+  id String @id @default(uuid()) @db.Uuid
+  nama_role String @unique @db.VarChar(100)
+  kode_role String? @db.VarChar(100)
+  catatan String?
+  system_key String? @unique
+  is_active Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+  m_role_ds m_role_d[]
+  users user_default[]
+}
+
+model m_role_d {
+  id String @id @default(uuid()) @db.Uuid
+  m_role_id String @db.Uuid
+  m_menu_id String @db.Uuid
+  is_read Boolean @default(false)
+  is_create Boolean @default(false)
+  is_update Boolean @default(false)
+  is_delete Boolean @default(false)
+  is_print Boolean @default(false)
+  m_role m_role @relation(fields: [m_role_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  m_menu m_menu @relation(fields: [m_menu_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  @@unique([m_role_id, m_menu_id])
+}
+
+model user_default {
+  id String @id @default(uuid()) @db.Uuid
+  name String @db.VarChar(100)
+  username String @unique @db.VarChar(100)
+  password_hash String
+  catatan String?
+  is_active Boolean @default(true)
+  role_id String @db.Uuid
+  role m_role @relation(fields: [role_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+  sessions auth_session[]
+}
+
+model auth_session {
+  id String @id @default(uuid()) @db.Uuid
+  token_hash String @unique
+  user_id String @db.Uuid
+  expires_at DateTime
+  user user_default @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  @@index([user_id])
 }

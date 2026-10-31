@@ -15,6 +15,8 @@
   },
   "type": "module",
   "scripts": {
+    "setup:admin": "node server/scripts/bootstrap-admin.js",
+    "test:auth": "node server/tests/auth.integration.test.js",
     "dev": "node --watch server/index.js",
     "start": "node server/index.js"
   }
