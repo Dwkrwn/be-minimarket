@@ -1,80 +1,620 @@
 // This is your Prisma schema file,
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
-// Get a free hosted Postgres database in seconds: `npx create-db`
-
 generator client {
   provider = "prisma-client-js"
-  output   = "../server/generated/prisma"
+  output   = "../src/models/prisma"
 }
 
 datasource db {
   provider = "postgresql"
 }
 
+// ================================
+// AUTH & RBAC (user_default is 1 of 21 tables)
+// ================================
+
 model m_menu {
   permissions m_role_d[]
-  id String @id @default(uuid()) @db.Uuid
-  parent String? @db.Uuid
-
-  name String @db.VarChar(100)
-  desc String? @db.Text
-  icon String? @db.VarChar(100)
-  is_active Boolean @default(true) @map("is_actiive")
-  seq String @default("0") @db.VarChar(100)
-  modul String? @map("module") @db.VarChar(100)
-  sub_modul String? @db.VarChar(100)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @default(now()) @updatedAt
-  path String? @db.VarChar(100)
+  id          String   @id @default(uuid()) @db.Uuid
+  parent      String?  @db.Uuid
+  name        String   @db.VarChar(100)
+  desc        String?  @db.Text
+  icon        String?  @db.VarChar(100)
+  is_active   Boolean  @default(true) @map("is_actiive")
+  seq         String   @default("0") @db.VarChar(100)
+  modul       String?  @map("module") @db.VarChar(100)
+  sub_modul   String?  @db.VarChar(100)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now()) @updatedAt
+  path        String?  @db.VarChar(100)
 }
 
 model m_role {
-  id String @id @default(uuid()) @db.Uuid
-  nama_role String @unique @db.VarChar(100)
-  kode_role String? @db.VarChar(100)
-  catatan String?
-  system_key String? @unique
-  is_active Boolean @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @default(now()) @updatedAt
-  m_role_ds m_role_d[]
-  users user_default[]
+  id         String   @id @default(uuid()) @db.Uuid
+  nama_role  String   @unique @db.VarChar(100)
+  kode_role  String?  @db.VarChar(100)
+  catatan    String?
+  system_key String?  @unique
+  is_active  Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @default(now()) @updatedAt
+  m_role_ds  m_role_d[]
+  users      user_default[]
 }
 
 model m_role_d {
-  id String @id @default(uuid()) @db.Uuid
-  m_role_id String @db.Uuid
-  m_menu_id String @db.Uuid
-  is_read Boolean @default(false)
-  is_create Boolean @default(false)
-  is_update Boolean @default(false)
-  is_delete Boolean @default(false)
-  is_print Boolean @default(false)
-  m_role m_role @relation(fields: [m_role_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  m_menu m_menu @relation(fields: [m_menu_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  id         String   @id @default(uuid()) @db.Uuid
+  m_role_id  String   @db.Uuid
+  m_menu_id  String   @db.Uuid
+  is_read    Boolean  @default(false)
+  is_create  Boolean  @default(false)
+  is_update  Boolean  @default(false)
+  is_delete  Boolean  @default(false)
+  is_print   Boolean  @default(false)
+  m_role     m_role   @relation(fields: [m_role_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  m_menu     m_menu   @relation(fields: [m_menu_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   @@unique([m_role_id, m_menu_id])
 }
 
+// 1. user_default
 model user_default {
-  id String @id @default(uuid()) @db.Uuid
-  name String @db.VarChar(100)
-  username String @unique @db.VarChar(100)
-  password_hash String
-  catatan String?
-  is_active Boolean @default(true)
-  role_id String @db.Uuid
-  role m_role @relation(fields: [role_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @default(now()) @updatedAt
-  sessions auth_session[]
+  id                String               @id @default(uuid()) @db.Uuid
+  name              String               @db.VarChar(100)
+  username          String               @unique @db.VarChar(100)
+  password_hash     String
+  catatan           String?
+  is_active         Boolean              @default(true)
+  role_id           String               @db.Uuid
+  role              m_role               @relation(fields: [role_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @default(now()) @updatedAt
+  sessions          auth_session[]
+  shifts            t_cashier_shift[]
+  pos_orders        t_pos_order[]
+  purchase_orders   t_purchase_order[]
+  goods_receipts    t_goods_receipt[]
+  purchase_returns  t_purchase_return[]
+  purchase_invoices t_purchase_invoice[]
+  purchase_payments t_purchase_payment[]
+  stock_cards       t_stock_card[]
+  stock_mutations   t_stock_mutation[]
+  stock_damaged     t_stock_damaged[]
+  stock_opnames     t_stock_opname[]     @relation("UserOpnames")
+  approved_opnames  t_stock_opname[]     @relation("UserApprovedOpnames")
+  stock_adjustments t_stock_adjustment[]
 }
 
 model auth_session {
-  id String @id @default(uuid()) @db.Uuid
-  token_hash String @unique
-  user_id String @db.Uuid
+  id         String       @id @default(uuid()) @db.Uuid
+  token_hash String       @unique
+  user_id    String       @db.Uuid
   expires_at DateTime
-  user user_default @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user       user_default @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   @@index([user_id])
+}
+
+// ================================
+// MASTER INVENTORY (Inventory 1.1, 1.2, 1.3, 4.1)
+// ================================
+
+// 2. m_category_rack
+model m_category_rack {
+  id             String             @id @default(uuid()) @db.Uuid
+  kode           String             @unique @db.VarChar(50)
+  nama           String             @db.VarChar(100)
+  tipe_zona      String             @db.VarChar(20) // 'GUDANG' | 'RAK'
+  lokasi         String?            @db.VarChar(100) // Penomoran zona rak / blok gudang
+  catatan        String?
+  is_active      Boolean            @default(true)
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @default(now()) @updatedAt
+
+  items          m_item[]
+  stocks         t_stock[]
+  stock_damaged  t_stock_damaged[]
+  opname_details t_stock_opname_d[]
+}
+
+// 3. m_uom
+model m_uom {
+  id             String             @id @default(uuid()) @db.Uuid
+  kode_uom       String             @unique @db.VarChar(50)
+  nama_uom       String             @db.VarChar(100)
+  satuan_dasar   String             @default("Pcs") @db.VarChar(50)
+  satuan_beli    String             @db.VarChar(50) // Kardus, Dus, Pack, Bal
+  rasio_konversi Int                @default(1) // 1 Kardus = N Pcs
+  catatan        String?
+  is_active      Boolean            @default(true)
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @default(now()) @updatedAt
+
+  items                  m_item[]
+  purchase_order_details t_purchase_order_d[]
+  goods_receipt_details  t_goods_receipt_d[]
+}
+
+// 4. m_item
+model m_item {
+  id                String               @id @default(uuid()) @db.Uuid
+  barcode           String               @unique @db.VarChar(100)
+  nama_barang       String               @db.VarChar(150)
+  category_rack_id  String?              @db.Uuid
+  uom_id            String?              @db.Uuid
+  harga_modal       Decimal              @default(0) @db.Decimal(18, 2)
+  harga_jual        Decimal              @default(0) @db.Decimal(18, 2)
+  is_active         Boolean              @default(true)
+  catatan           String?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @default(now()) @updatedAt
+
+  category_rack     m_category_rack?     @relation(fields: [category_rack_id], references: [id], onDelete: SetNull)
+  uom               m_uom?               @relation(fields: [uom_id], references: [id], onDelete: SetNull)
+  stocks            t_stock[]
+  stock_cards       t_stock_card[]
+  supplier_catalogs m_supplier_catalog[]
+  rop_setting       m_item_rop?
+  purchase_reqs     t_purchase_req[]
+  po_details        t_purchase_order_d[]
+  gr_details        t_goods_receipt_d[]
+  return_details    t_purchase_return_d[]
+  mutation_details  t_stock_mutation_d[]
+  damaged_items     t_stock_damaged[]
+  opname_details    t_stock_opname_d[]
+  adj_details       t_stock_adjustment_d[]
+  pos_order_details t_pos_order_d[]
+}
+
+// 5. m_item_rop
+model m_item_rop {
+  id                 String    @id @default(uuid()) @db.Uuid
+  item_id            String    @unique @db.Uuid
+  lead_time_days     Int       @default(3)
+  safety_stock_pcs   Int       @default(10)
+  avg_daily_sales    Decimal   @default(0) @db.Decimal(12, 2)
+  rop_pcs            Int       @default(0)
+  max_stock_pcs      Int       @default(100)
+  is_auto_pr         Boolean   @default(true)
+  last_calculated_at DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @default(now()) @updatedAt
+
+  item               m_item    @relation(fields: [item_id], references: [id], onDelete: Cascade)
+}
+
+// ================================
+// MASTER SUPPLIER & PURCHASING
+// ================================
+
+// 6. m_supplier
+model m_supplier {
+  id                String               @id @default(uuid()) @db.Uuid
+  kode_supplier     String               @unique @db.VarChar(50)
+  nama_supplier     String               @db.VarChar(150)
+  kontak_sales      String?              @db.VarChar(100)
+  no_telp           String?              @db.VarChar(50)
+  no_wa             String?              @db.VarChar(50)
+  alamat            String?
+  term_of_payment   Int                  @default(0) // TOP dalam hari
+  is_active         Boolean              @default(true)
+  catatan           String?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @default(now()) @updatedAt
+
+  catalogs          m_supplier_catalog[]
+  purchase_orders   t_purchase_order[]
+  purchase_reqs     t_purchase_req[]
+  purchase_returns  t_purchase_return[]
+  purchase_payments t_purchase_payment[]
+}
+
+// 7. m_supplier_catalog
+model m_supplier_catalog {
+  id          String   @id @default(uuid()) @db.Uuid
+  supplier_id String   @db.Uuid
+  item_id     String   @db.Uuid
+  harga_modal Decimal  @db.Decimal(18, 2) // harga modal per Pcs
+  is_active   Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now()) @updatedAt
+
+  supplier    m_supplier @relation(fields: [supplier_id], references: [id], onDelete: Cascade)
+  item        m_item     @relation(fields: [item_id], references: [id], onDelete: Cascade)
+  @@unique([supplier_id, item_id])
+}
+
+// 8. t_purchase_req (Auto-PR)
+model t_purchase_req {
+  id             String             @id @default(uuid()) @db.Uuid
+  no_pr          String             @unique @db.VarChar(50)
+  item_id        String             @db.Uuid
+  supplier_id    String?            @db.Uuid
+  qty_saran_pcs  Int
+  qty_saran_beli Int                @default(1)
+  stok_saat_ini  Int
+  rop_threshold  Int
+  status         String             @default("PENDING") @db.VarChar(20) // PENDING | PO_CREATED | CANCELLED
+  triggered_by   String             @default("AUTO_ROP") @db.VarChar(50)
+  catatan        String?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @default(now()) @updatedAt
+
+  item           m_item             @relation(fields: [item_id], references: [id], onDelete: Cascade)
+  supplier       m_supplier?        @relation(fields: [supplier_id], references: [id], onDelete: SetNull)
+  purchase_orders t_purchase_order[]
+}
+
+// 9. t_purchase_order
+model t_purchase_order {
+  id                String               @id @default(uuid()) @db.Uuid
+  no_po             String               @unique @db.VarChar(50)
+  supplier_id       String               @db.Uuid
+  pr_id             String?              @db.Uuid
+  status            String               @default("ORDERED") @db.VarChar(20) // DRAFT | ORDERED | PARTIAL_RECEIVED | COMPLETED | CANCELLED
+  tgl_po            DateTime             @default(now())
+  tgl_estimasi_tiba DateTime?
+  total_amount      Decimal              @default(0) @db.Decimal(18, 2)
+  catatan           String?
+  user_id           String?              @db.Uuid
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @default(now()) @updatedAt
+
+  supplier          m_supplier           @relation(fields: [supplier_id], references: [id], onDelete: Restrict)
+  purchase_req      t_purchase_req?      @relation(fields: [pr_id], references: [id], onDelete: SetNull)
+  user              user_default?        @relation(fields: [user_id], references: [id], onDelete: SetNull)
+  details           t_purchase_order_d[]
+  goods_receipts    t_goods_receipt[]
+  purchase_returns  t_purchase_return[]
+  invoices          t_purchase_invoice[]
+}
+
+model t_purchase_order_d {
+  id               String   @id @default(uuid()) @db.Uuid
+  po_id            String   @db.Uuid
+  item_id          String   @db.Uuid
+  uom_id           String?  @db.Uuid
+  qty_order_beli   Int      @default(1)
+  conversion_ratio Int      @default(1)
+  qty_order_pcs    Int
+  harga_satuan     Decimal  @db.Decimal(18, 2) // harga per Pcs
+  subtotal         Decimal  @db.Decimal(18, 2)
+  createdAt        DateTime @default(now())
+
+  po               t_purchase_order @relation(fields: [po_id], references: [id], onDelete: Cascade)
+  item             m_item           @relation(fields: [item_id], references: [id], onDelete: Restrict)
+  uom              m_uom?           @relation(fields: [uom_id], references: [id], onDelete: SetNull)
+}
+
+// 10. t_goods_receipt
+model t_goods_receipt {
+  id             String               @id @default(uuid()) @db.Uuid
+  no_gr          String               @unique @db.VarChar(50)
+  po_id          String               @db.Uuid
+  no_surat_jalan String?              @db.VarChar(100)
+  status         String               @default("RECEIVED") @db.VarChar(20) // RECEIVED | VERIFIED | CANCELLED
+  tgl_gr         DateTime             @default(now())
+  user_id        String?              @db.Uuid
+  catatan        String?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @default(now()) @updatedAt
+
+  po             t_purchase_order     @relation(fields: [po_id], references: [id], onDelete: Restrict)
+  user           user_default?        @relation(fields: [user_id], references: [id], onDelete: SetNull)
+  details        t_goods_receipt_d[]
+  invoices       t_purchase_invoice[]
+}
+
+model t_goods_receipt_d {
+  id                String   @id @default(uuid()) @db.Uuid
+  gr_id             String   @db.Uuid
+  item_id           String   @db.Uuid
+  uom_id            String?  @db.Uuid
+  qty_diterima_beli Int      @default(0)
+  qty_bagus_pcs     Int      @default(0)
+  qty_ditolak_pcs   Int      @default(0)
+  harga_satuan_pcs  Decimal  @db.Decimal(18, 2)
+  subtotal          Decimal  @db.Decimal(18, 2)
+  createdAt         DateTime @default(now())
+
+  gr                t_goods_receipt @relation(fields: [gr_id], references: [id], onDelete: Cascade)
+  item              m_item          @relation(fields: [item_id], references: [id], onDelete: Restrict)
+  uom               m_uom?          @relation(fields: [uom_id], references: [id], onDelete: SetNull)
+}
+
+// 11. t_purchase_return
+model t_purchase_return {
+  id             String                @id @default(uuid()) @db.Uuid
+  no_retur       String                @unique @db.VarChar(50)
+  po_id          String                @db.Uuid
+  supplier_id    String                @db.Uuid
+  damaged_id     String?               @db.Uuid
+  invoice_id     String?               @db.Uuid
+  status         String                @default("ISSUED") @db.VarChar(20) // ISSUED | MATCHED_INVOICE | CANCELLED
+  total_potongan Decimal               @db.Decimal(18, 2)
+  tgl_retur      DateTime              @default(now())
+  user_id        String?               @db.Uuid
+  catatan        String?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @default(now()) @updatedAt
+
+  po             t_purchase_order      @relation(fields: [po_id], references: [id], onDelete: Restrict)
+  supplier       m_supplier            @relation(fields: [supplier_id], references: [id], onDelete: Restrict)
+  damaged_stock  t_stock_damaged?      @relation(fields: [damaged_id], references: [id], onDelete: SetNull)
+  invoice        t_purchase_invoice?   @relation(fields: [invoice_id], references: [id], onDelete: SetNull)
+  user           user_default?         @relation(fields: [user_id], references: [id], onDelete: SetNull)
+  details        t_purchase_return_d[]
+}
+
+model t_purchase_return_d {
+  id               String   @id @default(uuid()) @db.Uuid
+  retur_id         String   @db.Uuid
+  item_id          String   @db.Uuid
+  qty_pcs          Int
+  harga_satuan_pcs Decimal  @db.Decimal(18, 2)
+  subtotal         Decimal  @db.Decimal(18, 2)
+  createdAt        DateTime @default(now())
+
+  retur            t_purchase_return @relation(fields: [retur_id], references: [id], onDelete: Cascade)
+  item             m_item            @relation(fields: [item_id], references: [id], onDelete: Restrict)
+}
+
+// 12. t_purchase_invoice (3-Way Matching)
+model t_purchase_invoice {
+  id               String               @id @default(uuid()) @db.Uuid
+  no_invoice       String               @unique @db.VarChar(50)
+  po_id            String               @db.Uuid
+  gr_id            String?              @db.Uuid
+  tgl_invoice      DateTime             @default(now())
+  tgl_jatuh_tempo  DateTime
+  gross_amount     Decimal              @db.Decimal(18, 2)
+  return_deduction Decimal              @default(0) @db.Decimal(18, 2)
+  net_payable      Decimal              @db.Decimal(18, 2)
+  status           String               @default("UNPAID") @db.VarChar(20) // UNPAID | PARTIAL | PAID | OVERDUE
+  user_id          String?              @db.Uuid
+  catatan          String?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @default(now()) @updatedAt
+
+  po               t_purchase_order     @relation(fields: [po_id], references: [id], onDelete: Restrict)
+  gr               t_goods_receipt?     @relation(fields: [gr_id], references: [id], onDelete: Restrict)
+  returns          t_purchase_return[]
+  user             user_default?        @relation(fields: [user_id], references: [id], onDelete: SetNull)
+  payments         t_purchase_payment[]
+
+  @@unique([po_id])
+}
+
+// 13. t_purchase_payment
+model t_purchase_payment {
+  id           String             @id @default(uuid()) @db.Uuid
+  no_payment   String             @unique @db.VarChar(50)
+  invoice_id   String             @db.Uuid
+  supplier_id  String             @db.Uuid
+  tgl_bayar    DateTime           @default(now())
+  jumlah_bayar Decimal            @db.Decimal(18, 2)
+  metode_bayar String             @default("TRANSFER") @db.VarChar(30) // TRANSFER | GIRO | KAS
+  no_referensi String?            @db.VarChar(100)
+  status       String             @default("SUCCESS") @db.VarChar(20)
+  user_id      String?            @db.Uuid
+  catatan      String?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @default(now()) @updatedAt
+
+  invoice      t_purchase_invoice @relation(fields: [invoice_id], references: [id], onDelete: Restrict)
+  supplier     m_supplier         @relation(fields: [supplier_id], references: [id], onDelete: Restrict)
+  user         user_default?      @relation(fields: [user_id], references: [id], onDelete: SetNull)
+}
+
+// ================================
+// INVENTORY TRANSACTIONS
+// ================================
+
+// 14. t_stock (Simpan dalam Pcs, tiadakan batch expired)
+model t_stock {
+  id               String           @id @default(uuid()) @db.Uuid
+  item_id          String           @db.Uuid
+  category_rack_id String?          @db.Uuid
+  location         String           @db.VarChar(20) // 'GUDANG' | 'RAK'
+  qty              Int              @default(0) // kuantitas dalam Pcs
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @default(now()) @updatedAt
+
+  item             m_item           @relation(fields: [item_id], references: [id], onDelete: Cascade)
+  category_rack    m_category_rack? @relation(fields: [category_rack_id], references: [id], onDelete: SetNull)
+  @@unique([item_id, location])
+}
+
+// 15. t_stock_card
+model t_stock_card {
+  id           String        @id @default(uuid()) @db.Uuid
+  item_id      String        @db.Uuid
+  tanggal      DateTime      @default(now())
+  no_dokumen   String        @db.VarChar(100)
+  jenis_mutasi String        @db.VarChar(30) // GR_MASUK | MUTASI_KELUAR | MUTASI_MASUK | POS_PENJUALAN | BARANG_RUSAK | RETUR_BELI | OPNAME_ADJUST
+  qty_in       Int           @default(0) // Pcs
+  qty_out      Int           @default(0) // Pcs
+  saldo_akhir  Int           // Pcs
+  location     String        @db.VarChar(20) // 'GUDANG' | 'RAK'
+  user_id      String?       @db.Uuid
+  keterangan   String?
+  createdAt    DateTime      @default(now())
+
+  item         m_item        @relation(fields: [item_id], references: [id], onDelete: Cascade)
+  user         user_default? @relation(fields: [user_id], references: [id], onDelete: SetNull)
+  @@index([item_id, tanggal])
+}
+
+// 16. t_stock_mutation
+model t_stock_mutation {
+  id            String               @id @default(uuid()) @db.Uuid
+  no_mutasi     String               @unique @db.VarChar(50)
+  from_location String               @default("GUDANG") @db.VarChar(20)
+  to_location   String               @default("RAK") @db.VarChar(20)
+  status        String               @default("COMPLETED") @db.VarChar(20)
+  keterangan    String?
+  user_id       String?              @db.Uuid
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @default(now()) @updatedAt
+
+  user          user_default?        @relation(fields: [user_id], references: [id], onDelete: SetNull)
+  details       t_stock_mutation_d[]
+}
+
+model t_stock_mutation_d {
+  id          String           @id @default(uuid()) @db.Uuid
+  mutation_id String           @db.Uuid
+  item_id     String           @db.Uuid
+  qty_pcs     Int
+  createdAt   DateTime         @default(now())
+
+  mutation    t_stock_mutation @relation(fields: [mutation_id], references: [id], onDelete: Cascade)
+  item        m_item           @relation(fields: [item_id], references: [id], onDelete: Restrict)
+}
+
+// 17. t_stock_damaged
+model t_stock_damaged {
+  id               String              @id @default(uuid()) @db.Uuid
+  no_damaged       String              @unique @db.VarChar(50)
+  item_id          String              @db.Uuid
+  category_rack_id String?             @db.Uuid
+  location         String              @db.VarChar(20) // 'GUDANG' | 'RAK'
+  qty_pcs          Int
+  kategori         String              @db.VarChar(30) // 'INTERNAL_LOSS' | 'SUPPLIER_RETURN'
+  alasan           String              @db.VarChar(100) // RUSAK_KEMASAN | CACAT_PABRIK | HILANG
+  status           String              @default("RECORDED") @db.VarChar(30) // RECORDED | RETURNED_TO_SUPPLIER | WRITTEN_OFF
+  user_id          String?             @db.Uuid
+  catatan          String?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @default(now()) @updatedAt
+
+  item             m_item              @relation(fields: [item_id], references: [id], onDelete: Restrict)
+  category_rack    m_category_rack?    @relation(fields: [category_rack_id], references: [id], onDelete: SetNull)
+  user             user_default?       @relation(fields: [user_id], references: [id], onDelete: SetNull)
+  purchase_returns t_purchase_return[]
+}
+
+// 18. t_stock_opname
+model t_stock_opname {
+  id          String               @id @default(uuid()) @db.Uuid
+  no_opname   String               @unique @db.VarChar(50)
+  status      String               @default("DRAFT") @db.VarChar(20) // DRAFT | SUBMITTED | APPROVED | REJECTED
+  tgl_opname  DateTime             @default(now())
+  catatan     String?
+  user_id     String?              @db.Uuid
+  approved_by String?              @db.Uuid
+  approved_at DateTime?
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @default(now()) @updatedAt
+
+  user        user_default?        @relation("UserOpnames", fields: [user_id], references: [id], onDelete: SetNull)
+  approver    user_default?        @relation("UserApprovedOpnames", fields: [approved_by], references: [id], onDelete: SetNull)
+  details     t_stock_opname_d[]
+  adjustments t_stock_adjustment[]
+}
+
+model t_stock_opname_d {
+  id               String           @id @default(uuid()) @db.Uuid
+  opname_id        String           @db.Uuid
+  item_id          String           @db.Uuid
+  category_rack_id String?          @db.Uuid
+  location         String           @db.VarChar(20) // 'GUDANG' | 'RAK'
+  qty_sistem       Int
+  qty_fisik        Int
+  selisih          Int
+  catatan          String?
+  createdAt        DateTime         @default(now())
+
+  opname           t_stock_opname   @relation(fields: [opname_id], references: [id], onDelete: Cascade)
+  item             m_item           @relation(fields: [item_id], references: [id], onDelete: Restrict)
+  category_rack    m_category_rack? @relation(fields: [category_rack_id], references: [id], onDelete: SetNull)
+}
+
+// 19. t_stock_adjustment
+model t_stock_adjustment {
+  id             String                 @id @default(uuid()) @db.Uuid
+  no_adjustment  String                 @unique @db.VarChar(50)
+  opname_id      String?                @db.Uuid
+  status         String                 @default("APPLIED") @db.VarChar(20)
+  tgl_adjustment DateTime               @default(now())
+  user_id        String?                @db.Uuid
+  catatan        String?
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @default(now()) @updatedAt
+
+  opname         t_stock_opname?        @relation(fields: [opname_id], references: [id], onDelete: SetNull)
+  user           user_default?          @relation(fields: [user_id], references: [id], onDelete: SetNull)
+  details        t_stock_adjustment_d[]
+}
+
+model t_stock_adjustment_d {
+  id             String             @id @default(uuid()) @db.Uuid
+  adjustment_id  String             @db.Uuid
+  item_id        String             @db.Uuid
+  location       String             @db.VarChar(20) // 'GUDANG' | 'RAK'
+  qty_adjustment Int // angka absolut perubahan
+  direction      String             @db.VarChar(10) // 'IN' atau 'OUT'
+  createdAt      DateTime           @default(now())
+
+  adjustment     t_stock_adjustment @relation(fields: [adjustment_id], references: [id], onDelete: Cascade)
+  item           m_item             @relation(fields: [item_id], references: [id], onDelete: Restrict)
+}
+
+// ================================
+// POINT OF SALE (POS)
+// ================================
+
+// 20. t_cashier_shift
+model t_cashier_shift {
+  id              String        @id @default(uuid()) @db.Uuid
+  no_shift        String        @unique @db.VarChar(50)
+  user_id         String        @db.Uuid
+  modal_awal      Decimal       @default(0) @db.Decimal(18, 2)
+  modal_akhir     Decimal?      @db.Decimal(18, 2)
+  total_tunai     Decimal       @default(0) @db.Decimal(18, 2)
+  total_non_tunai Decimal       @default(0) @db.Decimal(18, 2)
+  uang_fisik_laci Decimal?      @db.Decimal(18, 2)
+  selisih         Decimal?      @db.Decimal(18, 2)
+  status          String        @default("OPEN") @db.VarChar(20) // 'OPEN' | 'CLOSED'
+  opened_at       DateTime      @default(now())
+  closed_at       DateTime?
+  catatan         String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @default(now()) @updatedAt
+
+  user            user_default  @relation(fields: [user_id], references: [id], onDelete: Restrict)
+  orders          t_pos_order[]
+}
+
+// 21. t_pos_order
+model t_pos_order {
+  id           String          @id @default(uuid()) @db.Uuid
+  no_struk     String          @unique @db.VarChar(50)
+  shift_id     String          @db.Uuid
+  user_id      String          @db.Uuid
+  total_amount Decimal         @db.Decimal(18, 2)
+  bayar        Decimal         @db.Decimal(18, 2)
+  kembalian    Decimal         @default(0) @db.Decimal(18, 2)
+  metode_bayar String          @default("TUNAI") @db.VarChar(20) // TUNAI | QRIS | EDC | TRANSFER
+  status       String          @default("COMPLETED") @db.VarChar(20) // COMPLETED | VOID
+  catatan      String?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @default(now()) @updatedAt
+
+  shift        t_cashier_shift @relation(fields: [shift_id], references: [id], onDelete: Restrict)
+  user         user_default    @relation(fields: [user_id], references: [id], onDelete: Restrict)
+  details      t_pos_order_d[]
+}
+
+model t_pos_order_d {
+  id           String      @id @default(uuid()) @db.Uuid
+  order_id     String      @db.Uuid
+  item_id      String      @db.Uuid
+  qty_pcs      Int
+  harga_satuan Decimal     @db.Decimal(18, 2)
+  diskon       Decimal     @default(0) @db.Decimal(18, 2)
+  subtotal     Decimal     @db.Decimal(18, 2)
+  createdAt    DateTime    @default(now())
+
+  order        t_pos_order @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  item         m_item      @relation(fields: [item_id], references: [id], onDelete: Restrict)
 }

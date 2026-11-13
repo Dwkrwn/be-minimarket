@@ -15,9 +15,12 @@
   },
   "type": "module",
   "scripts": {
-    "setup:admin": "node server/scripts/bootstrap-admin.js",
-    "test:auth": "node server/tests/auth.integration.test.js",
-    "dev": "node --watch server/index.js",
-    "start": "node server/index.js"
+    "setup:admin": "node src/scripts/bootstrap-admin.js",
+    "test:db": "node src/scripts/test-db.js",
+    "sync:purchasing-menus": "node src/scripts/sync-purchasing-menu-labels.js",
+    "sync:pos-menus": "node src/scripts/sync-pos-menus.js",
+    "dev": "node --watch server.js",
+    "start": "node server.js",
+    "test": "node --test \"src/tests/*.test.js\""
   }
 }
