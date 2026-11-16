@@ -1,3 +1,4 @@
+import { randomInt } from "node:crypto";
 import bcrypt from "bcryptjs";
 import prisma from "../../config/database.js";
 import {
@@ -10,6 +11,18 @@ import {
 import { securityTransaction } from "../../core/utils/securityTx.js";
 import { validate } from "../../core/utils/validation.js";
 import { userSchema } from "./system.validation.js";
+
+// Tanpa karakter ambigu (I, l, O, 0, 1) agar mudah diketik ulang oleh kasir.
+const TEMP_PASSWORD_ALPHABET =
+  "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+
+function generateTemporaryPassword(length = 12) {
+  let password = "";
+  for (let i = 0; i < length; i += 1) {
+    password += TEMP_PASSWORD_ALPHABET[randomInt(TEMP_PASSWORD_ALPHABET.length)];
+  }
+  return password;
+}
 
 export async function getActor(tx, userId) {
   const current = await tx.user_default.findUnique({
@@ -170,6 +183,38 @@ export async function updateUserService(id, body, currentUserId) {
     }
 
     return publicUser(saved);
+  });
+}
+
+export async function resetUserPasswordService(id, currentUserId) {
+  return securityTransaction(async (tx) => {
+    const currentActor = await getActor(tx, currentUserId);
+    const existing = await tx.user_default.findUnique({
+      where: { id },
+      include: { role: true },
+    });
+    if (!existing) fail(404, "User tidak ditemukan");
+
+    if (isSuper(existing) && !isSuper(currentActor)) {
+      fail(403, "Admin tidak dapat mengelola Super Admin");
+    }
+
+    const temporary_password = generateTemporaryPassword();
+    const password_hash = await bcrypt.hash(temporary_password, 12);
+
+    const saved = await tx.user_default.update({
+      where: { id: existing.id },
+      data: { password_hash },
+      include: { role: true },
+    });
+
+    // Password baru membatalkan seluruh sesi login user tersebut.
+    await tx.auth_session.deleteMany({ where: { user_id: saved.id } });
+
+    return {
+      user: publicUser(saved),
+      temporary_password,
+    };
   });
 }
 

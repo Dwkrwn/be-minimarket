@@ -4,6 +4,7 @@ import {
   getUserByIdService,
   createUserService,
   updateUserService,
+  resetUserPasswordService,
   deleteUserService,
 } from "./user.service.js";
 
@@ -29,6 +30,12 @@ export const createUser = wrap(async (req, res) => {
 export const updateUser = wrap(async (req, res) => {
   const user = await updateUserService(req.params.id, req.body, req.user.id);
   res.status(200).json({ status: "success", data: user });
+});
+
+export const resetUserPassword = wrap(async (req, res) => {
+  const result = await resetUserPasswordService(req.params.id, req.user.id);
+  res.set("Cache-Control", "no-store");
+  res.json({ status: "success", data: result });
 });
 
 export const deleteUser = wrap(async (req, res) => {

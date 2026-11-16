@@ -1,7 +1,9 @@
 import prisma from "../config/database.js";
 
 async function seedInventory() {
-  console.log("Seeding baseline Inventory data (Kategori/Rak, UOM, Sample Item)...");
+  console.log(
+    "Seeding baseline Inventory data (Kategori/Rak, UOM, Sample Item)...",
+  );
   try {
     // 1. Kategori & Zona Rak / Gudang
     const rakSusu = await prisma.m_category_rack.upsert({
@@ -88,7 +90,9 @@ async function seedInventory() {
 
     // 3. Sample Item 1: Susu Ultra Milk 250ml
     const barcode1 = "8992388123456";
-    let item1 = await prisma.m_item.findUnique({ where: { barcode: barcode1 } });
+    let item1 = await prisma.m_item.findUnique({
+      where: { barcode: barcode1 },
+    });
     if (!item1) {
       item1 = await prisma.m_item.create({
         data: {
@@ -123,7 +127,9 @@ async function seedInventory() {
 
     // 4. Sample Item 2: Chitato Sapi Panggang 68g
     const barcode2 = "8992761001123";
-    let item2 = await prisma.m_item.findUnique({ where: { barcode: barcode2 } });
+    let item2 = await prisma.m_item.findUnique({
+      where: { barcode: barcode2 },
+    });
     if (!item2) {
       item2 = await prisma.m_item.create({
         data: {
@@ -167,4 +173,3 @@ async function seedInventory() {
 }
 
 seedInventory();
-

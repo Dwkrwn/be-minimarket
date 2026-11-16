@@ -4,6 +4,7 @@ import {
   getUserById,
   createUser,
   updateUser,
+  resetUserPassword,
   deleteUser,
 } from "./user.controller.js";
 import { validateGuidParam } from "../../core/middlewares/auth.js";
@@ -15,6 +16,7 @@ router.param("id", validateGuidParam("user"));
 router.get("/", listUsers);
 router.get("/:id", getUserById);
 router.post("/", createUser);
+router.post("/:id/reset-password", resetUserPassword);
 router.put("/:id", updateUser);
 router.delete("/:id", deleteUser);
 
