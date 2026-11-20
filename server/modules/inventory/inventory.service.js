@@ -244,9 +244,19 @@ export async function updateItem(id, data) {
 }
 
 export async function deleteItem(id) {
-  return await prisma.m_item.delete({
-    where: { id },
-  });
+  try {
+    return await prisma.m_item.delete({
+      where: { id },
+    });
+  } catch (error) {
+    if (error.code === "P2003") {
+      fail(
+        409,
+        "Barang tidak dapat dihapus permanen karena sudah memiliki riwayat transaksi (PO, penerimaan gudang, mutasi, atau penjualan kasir). Gunakan fitur ubah status menjadi 'Nonaktif' jika produk sudah tidak dijual.",
+      );
+    }
+    throw error;
+  }
 }
 
 // -----------------------------------------------------------------------------

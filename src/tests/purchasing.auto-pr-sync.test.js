@@ -70,7 +70,12 @@ function createFakeSyncClient({
     $transaction: async (fn) => fn(tx),
     m_item: {
       findUnique: async ({ where }) => items.find((i) => i.id === where.id) || null,
-      findMany: async () => items.filter((i) => i.is_active),
+      findMany: async ({ where } = {}) =>
+        items.filter((i) => {
+          if (where?.is_active !== undefined && i.is_active !== where.is_active) return false;
+          if (where?.rop_setting?.isNot === null && !i.rop_setting) return false;
+          return true;
+        }),
     },
     t_purchase_req: {
       findFirst: tx.t_purchase_req.findFirst,
@@ -89,9 +94,10 @@ function createFakeSyncClient({
   return { client, createdPrs, updatedPrCalls };
 }
 
-test("buildPlanForStoredItem mempertahankan avg_daily_sales tersimpan saat hitung ROP", () => {
+test("buildPlanForStoredItem memakai rop_pcs tersimpan, bukan hasil hitung ulang", () => {
   const item = makeItem({
     stockQty: 20,
+    rop_pcs: 25,
     avg_daily_sales: 5,
     lead_time_days: 3,
     safety_stock_pcs: 10,
@@ -101,9 +107,29 @@ test("buildPlanForStoredItem mempertahankan avg_daily_sales tersimpan saat hitun
 
   const plan = buildPlanForStoredItem(item);
   assert.equal(plan.ropPcs, 25);
-  assert.equal(plan.isBelowRop, true);
+  assert.equal(plan.computedRopPcs, 25);
+  assert.equal(plan.status, "RESTOCK");
+  assert.equal(plan.needsRestock, true);
   assert.equal(plan.qtySaranBeli, 4);
   assert.equal(plan.qtySaranPcs, 160);
+});
+
+test("buildPlanForStoredItem menandai Mendekati ROP sebagai perlu restock", () => {
+  const item = makeItem({ stockQty: 45, rop_pcs: 40, max_stock_pcs: 120 });
+
+  const plan = buildPlanForStoredItem(item);
+  // Batas warning = ceil(40 * 1.25) = 50
+  assert.equal(plan.warningLimit, 50);
+  assert.equal(plan.status, "WARNING");
+  assert.equal(plan.needsRestock, true);
+});
+
+test("buildPlanForStoredItem menganggap stok di atas batas warning aman", () => {
+  const item = makeItem({ stockQty: 51, rop_pcs: 40, max_stock_pcs: 120 });
+
+  const plan = buildPlanForStoredItem(item);
+  assert.equal(plan.status, "SAFE");
+  assert.equal(plan.needsRestock, false);
 });
 
 test("syncAutoPrForItem otomatis membuat Auto-PR saat barang baru stok 0 <= ROP", async () => {
@@ -130,19 +156,49 @@ test("syncAutoPrForItem membatalkan Auto-PR lama jika stok sudah di atas ROP", a
   assert.equal(updatedPrCalls[0].data.status, "CANCELLED");
 });
 
-test("syncAllBelowRopAutoPrs membuat PR hanya untuk item kritis tanpa PO aktif dan menutup PR stale", async () => {
+test("syncAllBelowRopAutoPrs membuat PR hanya untuk item non-Aman tanpa PO aktif dan menutup PR stale", async () => {
   const itemKritis = makeItem({ id: "item-kritis", stockQty: 0, safety_stock_pcs: 12 });
   const itemAdaPo = makeItem({ id: "item-po", stockQty: 0, safety_stock_pcs: 10 });
   const itemAman = makeItem({ id: "item-aman", stockQty: 80, safety_stock_pcs: 10 });
+  const itemTanpaRop = makeItem({ id: "item-tanpa-rop", stockQty: 0 });
+  itemTanpaRop.rop_setting = null;
 
   const { client, createdPrs, updatedPrCalls } = createFakeSyncClient({
-    items: [itemKritis, itemAdaPo, itemAman],
+    items: [itemKritis, itemAdaPo, itemAman, itemTanpaRop],
     pendingPrs: [{ item_id: "item-aman", status: "PENDING" }],
-    activePoDetails: [{ item_id: "item-po" }],
+    activePoDetails: [
+      {
+        item_id: "item-po",
+        po: { id: "po-1", no_po: "PO-001", status: "ORDERED", createdAt: new Date() },
+      },
+    ],
   });
 
-  const created = await syncAllBelowRopAutoPrs(client);
-  assert.equal(created.length, 1);
+  const result = await syncAllBelowRopAutoPrs(client);
+  assert.equal(result.created.length, 1);
   assert.equal(createdPrs[0].item_id, "item-kritis");
+  assert.equal(result.waiting.length, 1);
+  assert.equal(result.waiting[0].item.id, "item-po");
+  assert.equal(result.waiting[0].activePo.no_po, "PO-001");
   assert.equal(updatedPrCalls.some((c) => c.data.status === "CANCELLED"), true);
+});
+
+test("syncAllBelowRopAutoPrs mengusulkan barang berstatus Mendekati ROP", async () => {
+  const itemWarning = makeItem({ id: "item-warning", stockQty: 45, rop_pcs: 40 });
+  const { client, createdPrs } = createFakeSyncClient({ items: [itemWarning] });
+
+  const result = await syncAllBelowRopAutoPrs(client);
+  assert.equal(result.created.length, 1);
+  assert.equal(createdPrs[0].item_id, "item-warning");
+  assert.equal(createdPrs[0].rop_threshold, 40);
+});
+
+test("syncAllBelowRopAutoPrs tidak mengusulkan barang tanpa setting ROP", async () => {
+  const itemTanpaRop = makeItem({ id: "item-tanpa-rop", stockQty: 0 });
+  itemTanpaRop.rop_setting = null;
+
+  const { client, createdPrs } = createFakeSyncClient({ items: [itemTanpaRop] });
+  const result = await syncAllBelowRopAutoPrs(client);
+  assert.equal(result.created.length, 0);
+  assert.equal(createdPrs.length, 0);
 });

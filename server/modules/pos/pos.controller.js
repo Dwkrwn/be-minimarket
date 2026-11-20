@@ -16,6 +16,12 @@ export const getActiveShift = wrap(async (req, res) => {
   res.json({ status: "success", data });
 });
 
+// Riwayat transaksi pada shift aktif (hanya milik kasir yang login)
+export const getActiveShiftOrders = wrap(async (req, res) => {
+  const data = await posService.getActiveShiftOrders(req.user, req.query);
+  res.json({ status: "success", data });
+});
+
 // 1.1 Mesin Kasir / Checkout [Krusial 5]
 export const postCheckout = wrap(async (req, res) => {
   const data = await posService.executePosCheckoutTransaction(req.body, req.user);

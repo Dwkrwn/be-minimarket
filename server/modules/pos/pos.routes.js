@@ -11,6 +11,8 @@ const managerRoles = requireRoles("ADMIN", "SUPER_ADMIN");
 // 2.1 Buka Shift Kasir (/pos/shift/open)
 router.post("/shifts/open", cashierRoles, controller.postOpenShift);
 router.get("/shifts/active", cashierRoles, controller.getActiveShift);
+// Riwayat transaksi shift aktif untuk layar kasir (tanpa agregat/blind closing).
+router.get("/shifts/active/orders", cashierRoles, controller.getActiveShiftOrders);
 
 // 1.1 Mesin Kasir / Checkout [Krusial 5] (/pos/kasir/checkout)
 router.post("/checkout", cashierRoles, controller.postCheckout);

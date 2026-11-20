@@ -4,10 +4,12 @@ import { computeThreeWayMatching } from "./purchasing.matching.js";
 import { buildReceiptLines, evaluatePoFulfillment } from "./purchasing.receipt.js";
 import { assertReturnAllowed, issuePurchaseReturn } from "./purchasing.return.js";
 import {
+  ACTIVE_PO_STATUSES,
   syncAllBelowRopAutoPrs,
   syncAutoPrForItem,
   syncAutoPrForItems,
 } from "./autoPr.helper.js";
+import { computeRestockStatus } from "../pos/pos.restock.js";
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -195,8 +197,10 @@ export async function deleteSupplierCatalog(id) {
 // 2.1 Rekomendasi Belanja Otomatis (Auto-PR, t_purchase_req)
 export async function listPurchaseRequests(query = {}) {
   const { status = "PENDING" } = query;
+  let waiting = [];
   if (status === "PENDING") {
-    await syncAllBelowRopAutoPrs(prisma);
+    const syncResult = await syncAllBelowRopAutoPrs(prisma);
+    waiting = syncResult?.waiting || [];
   }
   const where = {};
   if (status) where.status = status;
@@ -221,12 +225,20 @@ export async function listPurchaseRequests(query = {}) {
     orderBy: { createdAt: "desc" },
   });
 
-  return prs.map((pr) => {
+  const rows = prs.map((pr) => {
     const totalStok = pr.item.stocks.reduce((acc, s) => acc + s.qty, 0);
     const supplierTermurah = pr.item.supplier_catalogs[0]?.supplier || pr.supplier;
     const hargaModalTermurah = pr.item.supplier_catalogs[0]
       ? Number(pr.item.supplier_catalogs[0].harga_modal)
       : Number(pr.item.harga_modal);
+    // Status mengikuti ROP tersimpan agar identik dengan halaman Batasan
+    // Pemesanan Barang (ROP).
+    const storedRop =
+      pr.item.rop_setting?.rop_pcs === null ||
+      pr.item.rop_setting?.rop_pcs === undefined
+        ? pr.rop_threshold
+        : Number(pr.item.rop_setting.rop_pcs);
+    const ropStatus = computeRestockStatus(totalStok, storedRop);
 
     return {
       id: pr.id,
@@ -237,7 +249,7 @@ export async function listPurchaseRequests(query = {}) {
       satuan_beli: pr.item.uom?.satuan_beli || "Kardus",
       rasio_konversi: pr.item.uom?.rasio_konversi || 1,
       stok_saat_ini_pcs: totalStok,
-      rop_threshold_pcs: pr.rop_threshold,
+      rop_threshold_pcs: storedRop,
       qty_saran_pcs: pr.qty_saran_pcs,
       qty_saran_beli: pr.qty_saran_beli,
       supplier_rekomendasi: supplierTermurah
@@ -251,10 +263,63 @@ export async function listPurchaseRequests(query = {}) {
         : null,
       estimasi_biaya: pr.qty_saran_pcs * hargaModalTermurah,
       status: pr.status,
-      peringatan_merah: totalStok <= pr.rop_threshold,
+      rop_status: ropStatus.key,
+      peringatan_merah: ropStatus.key === "RESTOCK",
+      can_convert: true,
+      has_active_po: false,
+      active_po: null,
       createdAt: pr.createdAt,
     };
   });
+
+  // Barang yang sudah punya PO aktif tetap ditampilkan supaya user tahu alasan
+  // barang tersebut tidak dibuatkan PR baru, tetapi tidak bisa dikonversi lagi.
+  const waitingRows = waiting.map(({ item, plan, activePo }) => {
+    const supplierTermurah = item.supplier_catalogs?.[0]?.supplier || null;
+    const hargaModalTermurah = item.supplier_catalogs?.[0]
+      ? Number(item.supplier_catalogs[0].harga_modal)
+      : Number(item.harga_modal);
+
+    return {
+      id: `waiting:${item.id}`,
+      no_pr: "-",
+      item_id: item.id,
+      nama_barang: item.nama_barang,
+      barcode: item.barcode,
+      satuan_beli: item.uom?.satuan_beli || "Kardus",
+      rasio_konversi: item.uom?.rasio_konversi || 1,
+      stok_saat_ini_pcs: plan.totalCurrentStock,
+      rop_threshold_pcs: plan.ropPcs,
+      qty_saran_pcs: plan.qtySaranPcs,
+      qty_saran_beli: plan.qtySaranBeli,
+      supplier_rekomendasi: supplierTermurah
+        ? {
+            id: supplierTermurah.id,
+            nama_supplier: supplierTermurah.nama_supplier,
+            no_wa: supplierTermurah.no_wa,
+            term_of_payment: supplierTermurah.term_of_payment,
+            harga_modal_pcs: hargaModalTermurah,
+          }
+        : null,
+      estimasi_biaya: plan.qtySaranPcs * hargaModalTermurah,
+      status: "PO_ACTIVE",
+      rop_status: plan.status,
+      peringatan_merah: plan.status === "RESTOCK",
+      can_convert: false,
+      has_active_po: true,
+      active_po: activePo
+        ? {
+            id: activePo.id,
+            no_po: activePo.no_po,
+            status: activePo.status,
+            createdAt: activePo.createdAt || null,
+          }
+        : null,
+      createdAt: activePo?.createdAt || null,
+    };
+  });
+
+  return [...rows, ...waitingRows];
 }
 
 // Konversi pilihan centang Auto-PR menjadi Purchase Order (PO) resmi
@@ -283,6 +348,35 @@ export async function convertAutoPrToPo(payload, user_id) {
 
     if (prs.length === 0) {
       fail(400, "Tidak ada data Auto-PR berstatus PENDING yang valid untuk diproses");
+    }
+
+    // Pengaman dobel order: barang yang masih punya PO aktif tidak boleh
+    // dikonversi lagi walau baris PR-nya masih PENDING.
+    const itemIds = [...new Set(prs.map((pr) => pr.item_id))];
+    const activePoDetails = await tx.t_purchase_order_d.findMany({
+      where: {
+        item_id: { in: itemIds },
+        po: { status: { in: ACTIVE_PO_STATUSES } },
+      },
+      select: {
+        item_id: true,
+        po: { select: { no_po: true, status: true } },
+      },
+    });
+
+    if (activePoDetails.length > 0) {
+      const activeItemIds = new Set(activePoDetails.map((detail) => detail.item_id));
+      const conflictingItems = prs.filter((pr) => activeItemIds.has(pr.item_id));
+      const detailText = conflictingItems
+        .map((pr) => {
+          const po = activePoDetails.find((detail) => detail.item_id === pr.item_id)?.po;
+          return `${pr.item.nama_barang} (${po?.no_po || "PO aktif"} - ${po?.status || "ORDERED"})`;
+        })
+        .join(", ");
+      fail(
+        400,
+        `Barang berikut masih memiliki PO aktif dan tidak dapat dipesan ulang: ${detailText}`,
+      );
     }
 
     // Kelompokkan item berdasarkan supplier termurah agar masing-masing supplier mendapatkan PO terpisah

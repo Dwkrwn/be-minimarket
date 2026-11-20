@@ -1,10 +1,32 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  RESTOCK_WARNING_RATIO,
   computeRestockPlan,
+  computeRestockStatus,
   parseBooleanFlag,
   parseWindowDays,
 } from "../../server/modules/pos/pos.restock.js";
+
+test("computeRestockStatus membagi RESTOCK, WARNING, dan SAFE sesuai halaman ROP", () => {
+  // Batas warning = ceil(rop * 1.25)
+  assert.equal(RESTOCK_WARNING_RATIO, 1.25);
+
+  // stok tepat di ROP -> RESTOCK
+  assert.deepEqual(computeRestockStatus(40, 40).key, "RESTOCK");
+  // stok di atas ROP tetapi masih <= 1.25x -> WARNING
+  assert.equal(computeRestockStatus(41, 40).key, "WARNING");
+  assert.equal(computeRestockStatus(50, 40).key, "WARNING");
+  // stok di atas batas warning -> SAFE
+  assert.equal(computeRestockStatus(51, 40).key, "SAFE");
+
+  // rop = 0: hanya RESTOCK saat stok <= 0, WARNING tidak pernah aktif
+  assert.equal(computeRestockStatus(0, 0).key, "RESTOCK");
+  assert.equal(computeRestockStatus(1, 0).key, "SAFE");
+
+  assert.equal(computeRestockStatus(41, 40).needsRestock, true);
+  assert.equal(computeRestockStatus(51, 40).needsRestock, false);
+});
 
 test('parseBooleanFlag: string "false" dari query tidak lagi dianggap true (P1 #7)', () => {
   assert.equal(parseBooleanFlag("false"), false);

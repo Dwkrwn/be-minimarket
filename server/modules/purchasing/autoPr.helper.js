@@ -2,7 +2,7 @@ import { computeRestockPlan } from "../pos/pos.restock.js";
 
 const DEFAULT_WINDOW_DAYS = 7;
 const AUTO_PR_TRIGGER = "AUTO_ROP";
-const ACTIVE_PO_STATUSES = ["ORDERED", "PARTIAL_RECEIVED"];
+export const ACTIVE_PO_STATUSES = ["ORDERED", "PARTIAL_RECEIVED"];
 
 const ITEM_AUTO_PR_INCLUDE = {
   rop_setting: true,
@@ -29,6 +29,17 @@ function canSyncAutoPr(client) {
 }
 
 /**
+ * Membatalkan Auto-PR yang masih menggantung untuk satu barang.
+ * Dipakai saat barang nonaktif, belum terdaftar di ROP, atau stoknya sudah aman.
+ */
+async function cancelPendingAutoPr(client, itemId) {
+  await client.t_purchase_req.updateMany({
+    where: { item_id: itemId, status: "PENDING", triggered_by: AUTO_PR_TRIGGER },
+    data: { status: "CANCELLED" },
+  });
+}
+
+/**
  * Membuat Auto-PR secara atomik (P1 #7).
  *
  * Kunci advisory per barang membuat pemeriksaan "sudah ada PR/PO?" dan
@@ -50,6 +61,8 @@ export async function createAutoPurchaseRequestIfAbsent(client, { item, plan }) 
       }),
     ]);
 
+    // Barang yang sudah punya PO aktif tidak dibuatkan PR baru; barisnya tetap
+    // ditampilkan di halaman rekomendasi sebagai "Sudah ada PO".
     if (existingPr || activePo) return null;
 
     const cheapestCatalog = item.supplier_catalogs?.[0] || null;
@@ -72,12 +85,19 @@ export async function createAutoPurchaseRequestIfAbsent(client, { item, plan }) 
   });
 }
 
+/**
+ * Menghitung rencana belanja memakai ROP tersimpan (m_item_rop.rop_pcs) agar
+ * status yang tampil sama persis dengan halaman Batasan Pemesanan Barang (ROP).
+ */
 export function buildPlanForStoredItem(item) {
   const savedAvgDailySales = Number(item.rop_setting?.avg_daily_sales || 0);
+  const storedRop = item.rop_setting?.rop_pcs;
+
   return computeRestockPlan({
     item,
     totalSoldPcs: savedAvgDailySales * DEFAULT_WINDOW_DAYS,
     windowDays: DEFAULT_WINDOW_DAYS,
+    ropOverride: storedRop === null || storedRop === undefined ? null : Number(storedRop),
   });
 }
 
@@ -107,20 +127,16 @@ export async function syncAutoPrForItem(client, itemId) {
     include: ITEM_AUTO_PR_INCLUDE,
   });
 
-  if (!item || !item.is_active) {
-    await client.t_purchase_req.updateMany({
-      where: { item_id: itemId, status: "PENDING", triggered_by: AUTO_PR_TRIGGER },
-      data: { status: "CANCELLED" },
-    });
+  // Barang nonaktif atau belum terdaftar di Batasan Pemesanan Barang (ROP)
+  // tidak boleh punya rekomendasi belanja.
+  if (!item || !item.is_active || !item.rop_setting) {
+    await cancelPendingAutoPr(client, itemId);
     return null;
   }
 
   const plan = buildPlanForStoredItem(item);
-  if (!plan.autoPrEnabled || !plan.isBelowRop) {
-    await client.t_purchase_req.updateMany({
-      where: { item_id: item.id, status: "PENDING", triggered_by: AUTO_PR_TRIGGER },
-      data: { status: "CANCELLED" },
-    });
+  if (!plan.autoPrEnabled || !plan.needsRestock) {
+    await cancelPendingAutoPr(client, item.id);
     return null;
   }
 
@@ -158,15 +174,20 @@ export async function syncAutoPrForItems(client, itemIds = []) {
 }
 
 /**
- * Mengevaluasi seluruh barang aktif dan memastikan antrean Auto-PR PENDING selalu sinkron
- * dengan posisi stok dan batas ROP terkini.
+ * Mengevaluasi seluruh barang yang terdaftar di Batasan Pemesanan Barang (ROP)
+ * dan memastikan antrean Auto-PR PENDING selalu sinkron dengan posisi stok,
+ * batas ROP tersimpan, dan status PO terkini.
+ *
+ * Barang berstatus selain "Aman" (Perlu Restock / Mendekati ROP) akan diusulkan.
+ * Barang yang sudah punya PO aktif dikembalikan sebagai `waiting` supaya tetap
+ * terlihat di halaman rekomendasi tanpa membuat PR baru.
  */
 export async function syncAllBelowRopAutoPrs(client) {
-  if (!canSyncAutoPr(client)) return [];
+  if (!canSyncAutoPr(client)) return { created: [], waiting: [] };
 
   const [items, pendingPrs, activePoDetails] = await Promise.all([
     client.m_item.findMany({
-      where: { is_active: true },
+      where: { is_active: true, rop_setting: { isNot: null } },
       include: ITEM_AUTO_PR_INCLUDE,
     }),
     client.t_purchase_req.findMany({
@@ -175,18 +196,29 @@ export async function syncAllBelowRopAutoPrs(client) {
     }),
     client.t_purchase_order_d.findMany({
       where: { po: { status: { in: ACTIVE_PO_STATUSES } } },
-      select: { item_id: true },
+      select: {
+        item_id: true,
+        po: { select: { id: true, no_po: true, status: true, createdAt: true } },
+      },
     }),
   ]);
 
   const activeItemIds = new Set(items.map((item) => item.id));
   const pendingItemIds = new Set(pendingPrs.map((pr) => pr.item_id));
-  const activePoItemIds = new Set(activePoDetails.map((detail) => detail.item_id));
+
+  const activePoByItemId = new Map();
+  for (const detail of activePoDetails) {
+    if (!activePoByItemId.has(detail.item_id) && detail.po) {
+      activePoByItemId.set(detail.item_id, detail.po);
+    }
+  }
 
   const toCancelItemIds = [];
   const toMarkPoCreatedItemIds = [];
   const created = [];
+  const waiting = [];
 
+  // PR yang barangnya nonaktif atau belum terdaftar di ROP harus dibatalkan.
   for (const pendingItemId of pendingItemIds) {
     if (!activeItemIds.has(pendingItemId)) {
       toCancelItemIds.push(pendingItemId);
@@ -196,15 +228,16 @@ export async function syncAllBelowRopAutoPrs(client) {
   for (const item of items) {
     const plan = buildPlanForStoredItem(item);
     const hasPending = pendingItemIds.has(item.id);
-    const hasActivePo = activePoItemIds.has(item.id);
+    const activePo = activePoByItemId.get(item.id) || null;
 
-    if (!plan.autoPrEnabled || !plan.isBelowRop) {
+    if (!plan.autoPrEnabled || !plan.needsRestock) {
       if (hasPending) toCancelItemIds.push(item.id);
       continue;
     }
 
-    if (hasActivePo) {
+    if (activePo) {
       if (hasPending) toMarkPoCreatedItemIds.push(item.id);
+      waiting.push({ item, plan, activePo });
       continue;
     }
 
@@ -238,5 +271,5 @@ export async function syncAllBelowRopAutoPrs(client) {
     });
   }
 
-  return created;
+  return { created, waiting };
 }

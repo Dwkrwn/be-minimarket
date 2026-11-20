@@ -12,6 +12,7 @@ import {
   projectActiveShift,
 } from "./pos.shift.js";
 import {
+  buildPlanForStoredItem,
   createAutoPurchaseRequestIfAbsent,
   syncAutoPrForItems,
 } from "../purchasing/autoPr.helper.js";
@@ -79,6 +80,142 @@ export async function getActiveCashierShift(user_id, actor = null) {
   });
 
   return projectActiveShift(shift, actorUser);
+}
+
+// -----------------------------------------------------------------------------
+// Riwayat transaksi pada shift yang masih berjalan (dipakai layar kasir)
+// -----------------------------------------------------------------------------
+// Catatan blind closing: endpoint ini sengaja mengembalikan transaksi per struk
+// saja. Tidak boleh ada agregat shift (omzet, total tunai, ekspektasi laci,
+// selisih) karena kasir harus menghitung uang fisik secara independen.
+
+export const ORDER_HISTORY_DEFAULT_LIMIT = 20;
+export const ORDER_HISTORY_MAX_LIMIT = 100;
+
+// id t_pos_order bertipe UUID. Tanpa validasi ini Prisma melempar P2007 (500)
+// bila client mengirim cursor sembarangan.
+const ORDER_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function parseOrderHistoryQuery(query = {}) {
+  const rawLimit = Number(query.limit ?? ORDER_HISTORY_DEFAULT_LIMIT);
+  const limit =
+    Number.isFinite(rawLimit) && rawLimit > 0
+      ? Math.min(Math.floor(rawLimit), ORDER_HISTORY_MAX_LIMIT)
+      : ORDER_HISTORY_DEFAULT_LIMIT;
+
+  const rawCursor = typeof query.cursor === "string" ? query.cursor.trim() : "";
+  const cursor = rawCursor || null;
+
+  return { limit, cursor };
+}
+
+export function projectHistoryOrder(order) {
+  const details = (order.details || []).map((detail) => ({
+    id: detail.id,
+    item_id: detail.item_id,
+    qty_pcs: Number(detail.qty_pcs),
+    harga_satuan: Number(detail.harga_satuan),
+    diskon: Number(detail.diskon),
+    subtotal: Number(detail.subtotal),
+    item: detail.item
+      ? {
+          id: detail.item.id,
+          barcode: detail.item.barcode,
+          nama_barang: detail.item.nama_barang,
+          harga_jual: Number(detail.item.harga_jual),
+          is_active: detail.item.is_active,
+        }
+      : null,
+  }));
+
+  return {
+    id: order.id,
+    no_struk: order.no_struk,
+    shift_id: order.shift_id,
+    user_id: order.user_id,
+    createdAt: order.createdAt,
+    metode_bayar: order.metode_bayar,
+    status: order.status,
+    catatan: order.catatan ?? null,
+    total_amount: Number(order.total_amount),
+    bayar: Number(order.bayar),
+    kembalian: Number(order.kembalian),
+    item_count: details.reduce((sum, detail) => sum + detail.qty_pcs, 0),
+    details,
+  };
+}
+
+export async function getActiveShiftOrders(user, query = {}, client = prisma) {
+  const actorUser = user && typeof user === "object" ? user : null;
+  if (!actorUser?.id) fail(401, "Autentikasi diperlukan untuk melihat riwayat transaksi");
+
+  const { limit, cursor } = parseOrderHistoryQuery(query);
+  if (cursor && !ORDER_ID_PATTERN.test(cursor)) {
+    fail(400, "Format cursor riwayat transaksi tidak valid");
+  }
+
+  // Ruang lingkup ditentukan dari shift OPEN milik pengguna yang login,
+  // bukan dari parameter client, agar kasir tidak bisa membaca shift lain.
+  const shift = await client.t_cashier_shift.findFirst({
+    where: { user_id: actorUser.id, status: "OPEN" },
+    select: { id: true, no_shift: true },
+  });
+
+  if (!shift) {
+    return { no_shift: null, orders: [], has_more: false, next_cursor: null };
+  }
+
+  const pageArgs = cursor ? { cursor: { id: cursor }, skip: 1 } : {};
+  const rows = await client.t_pos_order.findMany({
+    where: { shift_id: shift.id },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: limit + 1,
+    ...pageArgs,
+    select: {
+      id: true,
+      no_struk: true,
+      shift_id: true,
+      user_id: true,
+      createdAt: true,
+      metode_bayar: true,
+      status: true,
+      total_amount: true,
+      bayar: true,
+      kembalian: true,
+      catatan: true,
+      details: {
+        select: {
+          id: true,
+          item_id: true,
+          qty_pcs: true,
+          harga_satuan: true,
+          diskon: true,
+          subtotal: true,
+          item: {
+            select: {
+              id: true,
+              barcode: true,
+              nama_barang: true,
+              harga_jual: true,
+              is_active: true,
+            },
+          },
+        },
+        orderBy: { id: "asc" },
+      },
+    },
+  });
+
+  const hasMore = rows.length > limit;
+  const visible = hasMore ? rows.slice(0, limit) : rows;
+
+  return {
+    no_shift: shift.no_shift,
+    orders: visible.map(projectHistoryOrder),
+    has_more: hasMore,
+    next_cursor: hasMore ? (visible[visible.length - 1]?.id ?? null) : null,
+  };
 }
 
 // -----------------------------------------------------------------------------
@@ -398,8 +535,11 @@ export async function getDailySalesAndTriggerRop(query = {}) {
     }
   }
 
-  // 2. Evaluasi ROP dan Pemicu Auto-PR untuk seluruh item
+  // 2. Evaluasi ROP dan Pemicu Auto-PR.
+  //    Hanya barang yang terdaftar di Batasan Pemesanan Barang (m_item_rop)
+  //    yang dievaluasi agar statusnya sama dengan halaman ROP.
   const allItems = await prisma.m_item.findMany({
+    where: { is_active: true, rop_setting: { isNot: null } },
     include: {
       rop_setting: true,
       stocks: true,
@@ -416,36 +556,35 @@ export async function getDailySalesAndTriggerRop(query = {}) {
 
   for (const item of allItems) {
     const salesData = itemSalesMap.get(item.id) || { total_qty: 0, total_amount: 0 };
-    const plan = computeRestockPlan({
-      item,
-      totalSoldPcs: salesData.total_qty,
-      windowDays,
-    });
 
-    // Update parameter di m_item_rop
-    await prisma.m_item_rop.upsert({
-      where: { item_id: item.id },
-      update: {
-        avg_daily_sales: plan.avgDailySales,
-        rop_pcs: plan.ropPcs,
-        last_calculated_at: new Date(),
-      },
-      create: {
-        item_id: item.id,
-        lead_time_days: plan.leadTime,
-        safety_stock_pcs: plan.safetyStock,
-        max_stock_pcs: plan.maxStock,
-        avg_daily_sales: plan.avgDailySales,
-        rop_pcs: plan.ropPcs,
-        is_auto_pr: true,
-        last_calculated_at: new Date(),
-      },
-    });
+    // Saat evaluasi dijalankan, ROP dihitung ulang dari data penjualan window.
+    // Saat laporan hanya dibaca, pakai ROP tersimpan agar tidak menulis data
+    // dan tetap konsisten dengan halaman Batasan Pemesanan Barang (ROP).
+    const plan = triggerAutoPr
+      ? computeRestockPlan({
+          item,
+          totalSoldPcs: salesData.total_qty,
+          windowDays,
+        })
+      : buildPlanForStoredItem(item);
 
-    // 3. Pemicu Belanja Otomatis (Auto-PR) jika total stok <= ROP,
-    //    hanya untuk barang yang mengaktifkan is_auto_pr.
+    // Update parameter di m_item_rop HANYA saat evaluasi diminta eksplisit.
+    // Membuka laporan tidak boleh mengubah master ROP.
+    if (triggerAutoPr) {
+      await prisma.m_item_rop.updateMany({
+        where: { item_id: item.id },
+        data: {
+          avg_daily_sales: plan.avgDailySales,
+          rop_pcs: plan.ropPcs,
+          last_calculated_at: new Date(),
+        },
+      });
+    }
+
+    // 3. Pemicu Belanja Otomatis (Auto-PR) bila status selain "Aman"
+    //    (Perlu Restock / Mendekati ROP) dan is_auto_pr aktif.
     let autoPrCreated = null;
-    if (plan.isBelowRop && triggerAutoPr && plan.autoPrEnabled) {
+    if (triggerAutoPr && plan.needsRestock && plan.autoPrEnabled) {
       autoPrCreated = await createAutoPurchaseRequestIfAbsent(prisma, {
         item,
         plan,
@@ -461,7 +600,8 @@ export async function getDailySalesAndTriggerRop(query = {}) {
       kecepatan_jual_harian: plan.avgDailySales,
       total_stok_toko_pcs: plan.totalCurrentStock,
       batas_rop_pcs: plan.ropPcs,
-      status_stok: plan.isBelowRop ? "PERLU_RESTOCK" : "AMAN",
+      status_stok: plan.needsRestock ? "PERLU_RESTOCK" : "AMAN",
+      status_rop: plan.status,
       auto_pr: autoPrCreated,
     });
   }
